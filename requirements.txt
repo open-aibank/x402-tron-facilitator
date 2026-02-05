@@ -2,7 +2,7 @@ fastapi
 uvicorn
 pydantic-settings
 pydantic>=2.7.0
-x402-tron[tron,fastapi] @ git+https://github.com/open-aibank/x402-tron@v0.1.5#subdirectory=python/x402
+x402-tron[tron,fastapi] @ git+https://github.com/open-aibank/x402-tron@dev/trongrid_api_key#subdirectory=python/x402
 httpx
 
 python-dotenv
