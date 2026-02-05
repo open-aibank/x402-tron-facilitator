@@ -48,6 +48,7 @@ class FeeQuoteRequest(BaseModel):
 setup_logging()
 
 networks = ["tron:nile", "tron:mainnet", "tron:shasta"]
+#networks = ["tron:mainnet"]
 FACILITATOR_HOST = "0.0.0.0"
 FACILITATOR_PORT = 8001
 
@@ -110,7 +111,12 @@ async def verify(request: VerifyRequest):
     Returns:
         Verification result
     """
-    return await x402_facilitator.verify(request.paymentPayload, request.paymentRequirements)
+    try:
+        return await facilitator.fee_quote(request.accept, request.paymentPermitContext)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/settle", response_model=SettleResponse)
 async def settle(request: SettleRequest):
@@ -123,7 +129,11 @@ async def settle(request: SettleRequest):
     Returns:
         Settlement result with transaction hash
     """
-    return await x402_facilitator.settle(request.paymentPayload, request.paymentRequirements)
+    try:
+        result = await facilitator.verify(request.paymentPayload, request.paymentRequirements)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 def main():
     """Start the facilitator server"""
