@@ -38,6 +38,11 @@ X402 TRON Facilitator is a service designed to facilitate the **X402 (HTTP 402 P
    - `PRIVATE_KEY`: Your TRON private key (used for settlement).
    - `FEE_TO_ADDRESS`: The TRON address that will receive the fees.
    - `BASE_FEE`: The base fee amount (Sun for TRX, or scaled for tokens).
+   - `TRON_GRID_API_KEY`: TronGrid API key for TRON RPC access (required for reliable on-chain reads/writes, especially on `tron:mainnet`).
+
+   Notes:
+   - If you enable `tron:mainnet`, the facilitator relies on TronGrid (or another TRON JSON-RPC endpoint) to build and broadcast transactions.
+   - Without a valid `TRON_GRID_API_KEY`, requests may fail with HTTP `429 Too Many Requests` due to rate limiting.
 
 ## 🏃 Running the Facilitator
 
