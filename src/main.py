@@ -2,147 +2,265 @@
 Facilitator Main Entry Point
 Starts a FastAPI server for facilitator operations with full payment flow support.
 """
+
+import logging
 import asyncio
 import os
-import sys
-from pathlib import Path
-from typing import Any
+from contextlib import asynccontextmanager
 
-from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from x402_tron.logging_config import setup_logging
 from x402_tron.mechanisms.facilitator import ExactTronFacilitatorMechanism
 from x402_tron.signers.facilitator import TronFacilitatorSigner
 from x402_tron.facilitator.x402_facilitator import X402Facilitator
 from x402_tron.types import (
-    PaymentPayload,
-    PaymentRequirements,
     VerifyResponse,
     SettleResponse,
-    FeeQuoteResponse,
 )
-from pydantic import BaseModel
-import config
 
-class VerifyRequest(BaseModel):
-    """Verify request model"""
-    paymentPayload: PaymentPayload
-    paymentRequirements: PaymentRequirements
+from sqlalchemy.exc import IntegrityError
 
+from config import config
+from database import (
+    init_database,
+    get_session,
+    insert_payment_record_pending,
+    get_payment_by_id,
+)
+from logging_setup import setup_logging
+from schemas import VerifyRequest, SettleRequest, FeeQuoteRequest, PaymentRecordResponse
+from auth import setup_auth, api_key_refresher, limiter, get_dynamic_rate_limit, get_dynamic_key_func
+from monitoring import setup_monitoring
 
-class SettleRequest(BaseModel):
-    """Settle request model"""
-    paymentPayload: PaymentPayload
-    paymentRequirements: PaymentRequirements
-
-
-class FeeQuoteRequest(BaseModel):
-    """Fee quote request model"""
-    accept: PaymentRequirements
-    paymentPermitContext: dict | None = None
-
-# Setup logging
+# Setup initial logging (console only)
 setup_logging()
+logger = logging.getLogger(__name__)
 
-networks = ["nile", "mainnet", "shasta"]
-#networks = ["tron:mainnet"]
-FACILITATOR_HOST = "0.0.0.0"
-FACILITATOR_PORT = 8001
+# Global facilitator instance
+x402_facilitator = X402Facilitator()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan manager"""
+    # Startup
+    logger.info("Initializing application...")
+    
+    # Load configuration
+    config.load_from_yaml()
+    logger.info("Configuration loaded")
+    
+    # Re-setup logging with configuration (file logging)
+    setup_logging(config.logging_config)
+    logger.info("Logging configured with file output")
+    
+    # Initialize database (URL may include password from 1Password)
+    database_url = await config.get_database_url()
+    max_overflow = max(0, config.database_max_open_conns - config.database_max_idle_conns)
+    await init_database(
+        database_url,
+        pool_size=config.database_max_idle_conns,
+        max_overflow=max_overflow,
+        pool_recycle=config.database_max_life_time,
+        pool_pre_ping=True,
+        ssl_mode=config.database_ssl_mode,
+    )
+    logger.info("Database initialized")
+    
+    # Start API key refresher task
+    refresher_task = asyncio.create_task(api_key_refresher())
+    logger.info("API key refresher task started")
+    
+    # Get private key from 1Password
+    private_key = await config.get_private_key()
+    logger.info("Private key retrieved from 1Password")
+
+    # Get TronGrid API Key from 1Password and set in environment for the underlying library
+    trongrid_api_key = await config.get_trongrid_api_key()
+    if trongrid_api_key:
+        os.environ["TRON_GRID_API_KEY"] = trongrid_api_key
+        logger.info("TronGrid API Key retrieved and injected into environment")
+    else:
+        logger.warning("TronGrid API Key not configured. Using default rate limits for blockchain requests.")
+    
+    # Initialize facilitator for each network
+    for network in config.networks:
+        facilitator_signer = TronFacilitatorSigner.from_private_key(
+            private_key=private_key,
+            network=network,
+        )
+        facilitator_mechanism = ExactTronFacilitatorMechanism(
+            facilitator_signer,
+            fee_to=config.fee_to_address,
+            base_fee=config.base_fee,
+        )
+        x402_facilitator.register([f"tron:{network}"], facilitator_mechanism)
+        logger.info(f"Facilitator registered for tron:{network}")
+    
+    yield
+    
+    # Shutdown
+    refresher_task.cancel()
+    try:
+        await refresher_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("Shutting down...")
 
 # Init app
 app = FastAPI(
     title="X402 Facilitator",
     description="Facilitator service for X402 payment protocol",
     version="1.0.0",
+    lifespan=lifespan,
 )
-# Add CORS middleware
+
+# Setup sub-systems
+setup_auth(app)
+metrics_app = setup_monitoring(app, config)
+
+# If metrics_app is returned, it means monitoring is on a different port
+if metrics_app:
+    import threading
+    def run_metrics():
+        import uvicorn
+        metrics_config = uvicorn.Config(
+            metrics_app, 
+            host=config.server_host, 
+            port=config.monitoring_port, 
+            log_level="error"
+        )
+        server = uvicorn.Server(metrics_config)
+        server.run()
+    
+    threading.Thread(target=run_metrics, daemon=True).start()
+    logger.info(f"Monitoring server started on port {config.monitoring_port}")
+
+# Add CORS middleware (allow_credentials=False when using "*" per CORS spec)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-x402_facilitator = X402Facilitator()
 
-for network in networks:
-    # Initialize facilitator
-    facilitator_signer = TronFacilitatorSigner.from_private_key(
-        private_key=config.PRIVATE_KEY,
-        network=network,
-    )
-    facilitator_address = facilitator_signer.get_address()
-    facilitator_mechanism = ExactTronFacilitatorMechanism(
-        facilitator_signer,
-        fee_to=config.FEE_TO_ADDRESS,
-        base_fee=config.BASE_FEE,
-    )
-    x402_facilitator.register([f"tron:{network}"], facilitator_mechanism)
+
+@app.get("/health")
+async def health():
+    """Health check for K8s / load balancer liveness probe. No rate limit."""
+    return {"status": "ok"}
+
 
 @app.get("/supported")
-async def supported():
+async def supported(request: Request):
     """Get supported capabilities"""
-    return x402_facilitator.supported(config.FEE_TO_ADDRESS)
+    return x402_facilitator.supported(config.fee_to_address, pricing="flat")
 
-@app.post("/fee/quote", response_model=FeeQuoteResponse)
-async def fee_quote(request: FeeQuoteRequest):
-    """
-    Get fee quote for payment requirements
-    
-    Args:
-        request: Fee quote request with payment requirements
-        
-    Returns:
-        Fee quote response with fee details
-    """
-    return await x402_facilitator.fee_quote(request.accept)
+@app.post("/fee/quote")
+async def fee_quote(request: Request, request_data: FeeQuoteRequest):
+    """Get fee quote for payment requirements"""
+    return await x402_facilitator.fee_quote(
+        request_data.accepts,
+        request_data.paymentPermitContext
+    )
 
 @app.post("/verify", response_model=VerifyResponse)
-async def verify(request: VerifyRequest):
-    """
-    Verify payment payload
-    
-    Args:
-        request: Verify request with payment payload and requirements
-        
-    Returns:
-        Verification result
-    """
+async def verify(request: Request, verify_request: VerifyRequest):
+    """Verify payment payload"""
     try:
-        return await x402_facilitator.verify(request.paymentPayload, request.paymentRequirements)
+        return await x402_facilitator.verify(verify_request.paymentPayload, verify_request.paymentRequirements)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Verify failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+def _get_payment_id_from_request(request_data: SettleRequest) -> str | None:
+    """Safely extract payment_id from request; returns None if structure is invalid."""
+    try:
+        return request_data.paymentPayload.payload.payment_permit.meta.payment_id
+    except AttributeError:
+        return None
+
 
 @app.post("/settle", response_model=SettleResponse)
-async def settle(request: SettleRequest):
-    """
-    Settle payment on-chain
-    
-    Args:
-        request: Settle request with payment payload and requirements
-        
-    Returns:
-        Settlement result with transaction hash
-    """
-    try:
-        result = await x402_facilitator.settle(request.paymentPayload, request.paymentRequirements)
+@limiter.limit(get_dynamic_rate_limit, key_func=get_dynamic_key_func)
+async def settle(request: Request, request_data: SettleRequest):
+    """Settle payment on-chain. DB record is written first (pending), then settle; on settle failure the DB transaction is rolled back for atomicity."""
+    payment_id = _get_payment_id_from_request(request_data)
+    if not payment_id:
+        # No payment_id: settle only, no DB record
+        try:
+            result = await x402_facilitator.settle(
+                request_data.paymentPayload, request_data.paymentRequirements
+            )
+            return result
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception:
+            logger.exception("Settle failed")
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    # Transactional flow: insert pending -> settle -> update & commit (or 409 on duplicate key)
+    async with get_session() as session:
+        try:
+            record = await insert_payment_record_pending(session, payment_id)
+        except IntegrityError:
+            await session.rollback()
+            logger.info(f"Payment record already exists: {payment_id}")
+            existing = await get_payment_by_id(payment_id)
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "payment_id already processed",
+                    "success": existing.status == "success" if existing else False,
+                    "transaction": (existing.tx_hash or None) if existing else None,
+                    "payment_id": payment_id,
+                },
+            )
+        try:
+            result = await x402_facilitator.settle(
+                request_data.paymentPayload, request_data.paymentRequirements
+            )
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception:
+            await session.rollback()
+            logger.exception("Settle failed")
+            raise HTTPException(status_code=500, detail="Internal server error")
+        tx_hash = result.transaction or ""
+        status = "success" if result.success else "failed"
+        record.tx_hash = tx_hash
+        record.status = status
+        await session.commit()
+        logger.info(f"Payment record saved: {payment_id} -> {tx_hash}")
         return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/payments/{payment_id}", response_model=PaymentRecordResponse)
+async def get_payment(request: Request, payment_id: str):
+    """Get payment record by payment_id"""
+    record = await get_payment_by_id(payment_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    
+    return PaymentRecordResponse(
+        paymentId=record.payment_id,
+        txHash=record.tx_hash,
+        status=record.status,
+        createdAt=record.created_at,
+    )
 
 def main():
     """Start the facilitator server"""
     print("Starting X402 Facilitator Server")
-    
+    config.load_from_yaml()
     uvicorn.run(
         app,
-        host=FACILITATOR_HOST,
-        port=FACILITATOR_PORT,
+        host=config.server_host,
+        port=config.server_port,
         log_level="info",
     )
 

@@ -85,3 +85,10 @@ venv.bak/
 
 # Logs
 *.log
+logs
+
+# Config (contains sensitive info)
+facilitator.config.yaml
+
+# Private
+_private/

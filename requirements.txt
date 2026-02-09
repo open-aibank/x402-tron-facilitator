@@ -8,4 +8,22 @@ httpx
 tronpy>=0.4.0
 eth-account>=0.10.0
 
-python-dotenv
+# Database
+sqlalchemy>=2.0.0
+asyncpg
+greenlet
+
+# Configuration
+pyyaml
+onepassword-sdk
+
+# Rate Limiting
+slowapi
+
+# Monitoring
+prometheus-fastapi-instrumentator
+
+# Testing
+pytest
+pytest-asyncio
+pytest-mock

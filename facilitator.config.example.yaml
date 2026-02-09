@@ -1,0 +1,54 @@
+# x402-tron-facilitator config
+
+database:
+  url: ""
+  # --- Local Development Fallbacks ---
+  # If provided, these values will be used to bypass 1Password retrieval for database password
+  # password: ""
+  # --- Connection pool (optional) ---
+  # ssl_mode: "disable"          # disable | require | verify-ca | verify-full
+  # max_open_conns: 25           # max connections in pool (pool_size + max_overflow)
+  # max_idle_conns: 15           # connections to keep open when idle (pool_size)
+  # max_life_time: 600           # seconds before recycling a connection (pool_recycle)
+
+onepassword:
+  vault: ""
+  privatekey_item: ""
+  privatekey_field: ""
+  database_item: ""
+  database_field: ""
+  trongrid_item: ""
+  trongrid_field: ""
+
+server:
+  host: "0.0.0.0"
+  port: 8001
+
+logging:
+  dir: "logs"
+  filename: "x402-facilitator.log"
+  level: "INFO"
+
+rate_limit:
+  api_key_refresh_interval: 60
+  authenticated: "1000/minute"
+  anonymous: "1/minute"
+
+monitoring:
+  port: 8001  # Default to use same port as server if same
+  endpoint: "/metrics"
+
+facilitator:
+  fee_to_address: ""
+  # Base fee per token (symbol -> amount in smallest units)
+  base_fee:
+    USDT: 100              # 0.0001 USDT (6 decimals)
+    USDD: 100000000000000  # 0.0001 USDD (18 decimals)
+  # --- Local Development Fallbacks ---
+  # If provided, these values will be used to bypass 1Password retrieval
+  private_key: ""
+  trongrid_api_key: ""
+  
+  networks:
+    - nile
+    - mainnet
