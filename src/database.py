@@ -10,6 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
+def _ssl_for_asyncpg(ssl_mode: str):
+    """Return ssl argument for asyncpg: False when disable, True otherwise."""
+    return ssl_mode.strip().lower() != "disable"
+
+
 class Base(DeclarativeBase):
     """SQLAlchemy declarative base"""
     pass
@@ -43,19 +48,32 @@ _engine = None
 _async_session_maker = None
 
 
-async def init_database(database_url: str) -> None:
+async def init_database(
+    database_url: str,
+    *,
+    pool_size: int,
+    max_overflow: int,
+    pool_recycle: int,
+    pool_pre_ping: bool = True,
+    ssl_mode: str,
+) -> None:
     """
     Initialize the database connection and create tables.
-    
-    Args:
-        database_url: PostgreSQL connection URL
     """
     global _engine, _async_session_maker
-    
-    # Use asyncpg for PostgreSQL
-    _engine = create_async_engine(database_url, echo=False)
-    # Configure connection pool if needed
-    
+
+    engine_kw = dict(
+        echo=False,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
+        pool_recycle=pool_recycle,
+        pool_pre_ping=pool_pre_ping,
+    )
+    if _ssl_for_asyncpg(ssl_mode) is False:
+        engine_kw["connect_args"] = {"ssl": False}
+
+    _engine = create_async_engine(database_url, **engine_kw)
+
     _async_session_maker = async_sessionmaker(_engine, expire_on_commit=False)
     
     # Create tables
@@ -89,6 +107,28 @@ async def get_all_api_keys() -> list[str]:
     async with get_session() as session:
         result = await session.execute(select(APIKey.key))
         return [row[0] for row in result.all()]
+
+
+async def insert_payment_record_pending(session: AsyncSession, payment_id: str) -> PaymentRecord:
+    """
+    Insert a payment record with status 'pending' in the current transaction.
+    Does not commit; caller must commit after settle succeeds or rollback on failure.
+
+    Args:
+        session: Active AsyncSession (transaction in progress)
+        payment_id: Unique payment identifier
+
+    Returns:
+        The added PaymentRecord (tx_hash='', status='pending')
+    """
+    record = PaymentRecord(
+        payment_id=payment_id,
+        tx_hash="",
+        status="pending",
+    )
+    session.add(record)
+    await session.flush()
+    return record
 
 
 async def save_payment_record(

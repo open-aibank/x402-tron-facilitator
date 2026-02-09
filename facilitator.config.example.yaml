@@ -5,6 +5,11 @@ database:
   # --- Local Development Fallbacks ---
   # If provided, these values will be used to bypass 1Password retrieval for database password
   # password: ""
+  # --- Connection pool (optional) ---
+  # ssl_mode: "disable"          # disable | require | verify-ca | verify-full
+  # max_open_conns: 25           # max connections in pool (pool_size + max_overflow)
+  # max_idle_conns: 15           # connections to keep open when idle (pool_size)
+  # max_life_time: 600           # seconds before recycling a connection (pool_recycle)
 
 onepassword:
   vault: ""

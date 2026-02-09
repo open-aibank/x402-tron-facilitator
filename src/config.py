@@ -9,7 +9,6 @@ from urllib.parse import quote, urlparse, urlunparse
 
 import yaml
 
-
 class Config:
     """Application configuration"""
     
@@ -93,6 +92,26 @@ class Config:
     def database_url(self) -> str:
         """Get database connection URL (may not contain password if using 1Password)"""
         return self._config.get("database", {}).get("url", "")
+
+    @property
+    def database_ssl_mode(self) -> str:
+        """SSL mode for DB: disable | require | verify-ca | verify-full. Default disable (local)."""
+        return self._config.get("database", {}).get("ssl_mode", "disable")
+
+    @property
+    def database_max_open_conns(self) -> int:
+        """Max total connections in pool (pool_size + max_overflow). Default 25."""
+        return int(self._config.get("database", {}).get("max_open_conns", 25))
+
+    @property
+    def database_max_idle_conns(self) -> int:
+        """Connections to keep open when idle (pool_size). Default 15."""
+        return int(self._config.get("database", {}).get("max_idle_conns", 15))
+
+    @property
+    def database_max_life_time(self) -> int:
+        """Seconds before recycling a connection (pool_recycle). Default 600."""
+        return int(self._config.get("database", {}).get("max_life_time", 600))
 
     @property
     def onepassword_database_item(self) -> str:

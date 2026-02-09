@@ -23,7 +23,12 @@ from x402_tron.types import (
 from sqlalchemy.exc import IntegrityError
 
 from config import config
-from database import init_database, save_payment_record, get_payment_by_id
+from database import (
+    init_database,
+    get_session,
+    insert_payment_record_pending,
+    get_payment_by_id,
+)
 from logging_setup import setup_logging
 from schemas import VerifyRequest, SettleRequest, FeeQuoteRequest, PaymentRecordResponse
 from auth import setup_auth, api_key_refresher, limiter, get_dynamic_rate_limit, get_dynamic_key_func
@@ -52,7 +57,15 @@ async def lifespan(app: FastAPI):
     
     # Initialize database (URL may include password from 1Password)
     database_url = await config.get_database_url()
-    await init_database(database_url)
+    max_overflow = max(0, config.database_max_open_conns - config.database_max_idle_conns)
+    await init_database(
+        database_url,
+        pool_size=config.database_max_idle_conns,
+        max_overflow=max_overflow,
+        pool_recycle=config.database_max_life_time,
+        pool_pre_ping=True,
+        ssl_mode=config.database_ssl_mode,
+    )
     logger.info("Database initialized")
     
     # Start API key refresher task
@@ -133,6 +146,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.get("/health")
+async def health():
+    """Health check for K8s / load balancer liveness probe. No rate limit."""
+    return {"status": "ok"}
+
+
 @app.get("/supported")
 async def supported(request: Request):
     """Get supported capabilities"""
@@ -168,34 +188,56 @@ def _get_payment_id_from_request(request_data: SettleRequest) -> str | None:
 @app.post("/settle", response_model=SettleResponse)
 @limiter.limit(get_dynamic_rate_limit, key_func=get_dynamic_key_func)
 async def settle(request: Request, request_data: SettleRequest):
-    """Settle payment on-chain"""
-    try:
-        result = await x402_facilitator.settle(request_data.paymentPayload, request_data.paymentRequirements)
-        
-        payment_id = _get_payment_id_from_request(request_data)
+    """Settle payment on-chain. DB record is written first (pending), then settle; on settle failure the DB transaction is rolled back for atomicity."""
+    payment_id = _get_payment_id_from_request(request_data)
+    if not payment_id:
+        # No payment_id: settle only, no DB record
+        try:
+            result = await x402_facilitator.settle(
+                request_data.paymentPayload, request_data.paymentRequirements
+            )
+            return result
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception:
+            logger.exception("Settle failed")
+            raise HTTPException(status_code=500, detail="Internal server error")
+
+    # Transactional flow: insert pending -> settle -> update & commit (or 409 on duplicate key)
+    async with get_session() as session:
+        try:
+            record = await insert_payment_record_pending(session, payment_id)
+        except IntegrityError:
+            await session.rollback()
+            logger.info(f"Payment record already exists: {payment_id}")
+            existing = await get_payment_by_id(payment_id)
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "payment_id already processed",
+                    "success": existing.status == "success" if existing else False,
+                    "transaction": (existing.tx_hash or None) if existing else None,
+                    "payment_id": payment_id,
+                },
+            )
+        try:
+            result = await x402_facilitator.settle(
+                request_data.paymentPayload, request_data.paymentRequirements
+            )
+        except ValueError as e:
+            await session.rollback()
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception:
+            await session.rollback()
+            logger.exception("Settle failed")
+            raise HTTPException(status_code=500, detail="Internal server error")
         tx_hash = result.transaction or ""
         status = "success" if result.success else "failed"
-        
-        if payment_id:
-            try:
-                await save_payment_record(
-                    payment_id=payment_id,
-                    tx_hash=tx_hash,
-                    status=status,
-                )
-                logger.info(f"Payment record saved: {payment_id} -> {tx_hash}")
-            except IntegrityError:
-                # Idempotent: same payment_id already recorded (e.g. client retry)
-                logger.info(f"Payment record already exists (idempotent): {payment_id}")
-            except Exception as e:
-                logger.error(f"Failed to save payment record: {e}")
-        
+        record.tx_hash = tx_hash
+        record.status = status
+        await session.commit()
+        logger.info(f"Payment record saved: {payment_id} -> {tx_hash}")
         return result
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.exception("Settle failed")
-        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.get("/payments/{payment_id}", response_model=PaymentRecordResponse)
 async def get_payment(request: Request, payment_id: str):

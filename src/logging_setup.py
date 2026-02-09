@@ -49,7 +49,7 @@ def setup_logging(logging_config=None):
                 filename=log_path,
                 when="midnight",
                 interval=1,
-                backupCount=0,  # 0 means keep all old log files
+                backupCount=backup_count,  # 0 means keep all old log files
                 encoding="utf-8"
             )
             file_handler.setFormatter(formatter)

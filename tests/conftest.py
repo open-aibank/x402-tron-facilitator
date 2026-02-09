@@ -35,5 +35,4 @@ def mock_config(mocker):
 def mock_db(mocker):
     """Fixture to mock database operations."""
     mock_get = mocker.patch("main.get_payment_by_id", new_callable=AsyncMock)
-    mock_save = mocker.patch("main.save_payment_record", new_callable=AsyncMock)
-    return {"get": mock_get, "save": mock_save}
+    return {"get": mock_get}
