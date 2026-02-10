@@ -211,6 +211,11 @@ class Config:
         return self._config.get("server", {}).get("port", 8001)
 
     @property
+    def server_workers(self) -> int:
+        """Get uvicorn workers (default 1). Use 2+ for higher settle QPS headroom."""
+        return int(self._config.get("server", {}).get("workers", 1))
+
+    @property
     def logging_config(self) -> dict:
         """Get logging configuration"""
         return self._config.get("logging", {})

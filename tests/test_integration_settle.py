@@ -216,7 +216,7 @@ async def integration_client(mocker, integration_db_url):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_settle_integration_first_request_success(integration_client, mocker):
-    """First request with payment_id: 200, record in DB with success."""
+    """With payment_id: settle first -> save_payment_record -> 200, record in DB with success."""
     from x402_tron.types import SettleResponse
 
     async def mock_settle_success(*args, **kwargs):
@@ -244,13 +244,18 @@ async def test_settle_integration_first_request_success(integration_client, mock
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_settle_integration_duplicate_409(integration_client, mocker):
-    """Same payment_id twice: first 200, second 409; only one record in DB."""
+async def test_settle_integration_same_payment_id_twice(integration_client, mocker):
+    """Same payment_id twice: both 200; two records in DB; GET returns latest."""
     from x402_tron.types import SettleResponse
 
+    tx_hashes = ["0xintegration_dup_1", "0xintegration_dup_2"]
+    call_idx = [0]
+
     async def mock_settle_success(*args, **kwargs):
-        await asyncio.sleep(0.2)
-        return SettleResponse(success=True, transaction="0xintegration_dup")
+        await asyncio.sleep(0.1)
+        i = call_idx[0]
+        call_idx[0] += 1
+        return SettleResponse(success=True, transaction=tx_hashes[min(i, len(tx_hashes) - 1)])
 
     mocker.patch("main.x402_facilitator.settle", new_callable=AsyncMock, side_effect=mock_settle_success)
 
@@ -259,23 +264,24 @@ async def test_settle_integration_duplicate_409(integration_client, mocker):
 
     first = await integration_client.post("/settle", json=settle_body(payment_id))
     assert first.status_code == 200
+    assert first.json()["transaction"] == tx_hashes[0]
 
     second = await integration_client.post("/settle", json=settle_body(payment_id))
-    assert second.status_code == 409
-    detail = second.json()["detail"]
-    assert detail["message"] == "payment_id already processed"
-    assert detail["success"] is True
-    assert detail["payment_id"] == payment_id
+    assert second.status_code == 200
+    assert second.json()["transaction"] == tx_hashes[1]
 
     get_resp = await integration_client.get(f"/payments/{payment_id}")
     assert get_resp.status_code == 200
-    assert get_resp.json()["status"] == "success"
+    record = get_resp.json()
+    assert record["paymentId"] == payment_id
+    assert record["status"] == "success"
+    assert record["txHash"] == tx_hashes[1]
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_settle_integration_concurrent_single_settle(integration_client, mocker):
-    """Concurrent requests with same payment_id: only one settle called, one 200 and rest 409."""
+async def test_settle_integration_concurrent_same_payment_id(integration_client, mocker):
+    """Concurrent requests with same payment_id: all 200, settle called n times, n records; GET returns latest."""
     from x402_tron.types import SettleResponse
 
     settle_call_count = 0
@@ -283,8 +289,8 @@ async def test_settle_integration_concurrent_single_settle(integration_client, m
     async def mock_settle_count(*args, **kwargs):
         nonlocal settle_call_count
         settle_call_count += 1
-        await asyncio.sleep(1)
-        return SettleResponse(success=True, transaction="0xconcurrent")
+        await asyncio.sleep(0.1)
+        return SettleResponse(success=True, transaction=f"0xconcurrent_{settle_call_count}")
 
     mocker.patch("main.x402_facilitator.settle", new_callable=AsyncMock, side_effect=mock_settle_count)
 
@@ -299,11 +305,11 @@ async def test_settle_integration_concurrent_single_settle(integration_client, m
     responses = await asyncio.gather(*tasks, return_exceptions=True)
 
     ok_count = sum(1 for r in responses if not isinstance(r, Exception) and r.status_code == 200)
-    conflict_count = sum(1 for r in responses if not isinstance(r, Exception) and r.status_code == 409)
-    assert ok_count == 1
-    assert conflict_count == n - 1
-    assert settle_call_count == 1
+    assert ok_count == n
+    assert settle_call_count == n
 
     get_resp = await integration_client.get(f"/payments/{payment_id}")
     assert get_resp.status_code == 200
-    assert get_resp.json()["status"] == "success"
+    record = get_resp.json()
+    assert record["paymentId"] == payment_id
+    assert record["status"] == "success"

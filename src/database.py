@@ -5,7 +5,7 @@ Database module for payment record persistence
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import String, DateTime
+from sqlalchemy import String, DateTime, BigInteger
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -25,7 +25,8 @@ class PaymentRecord(Base):
     
     __tablename__ = "payment_records"
     
-    payment_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    payment_id: Mapped[str] = mapped_column(String(128), nullable=False)
     tx_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -109,27 +110,6 @@ async def get_all_api_keys() -> list[str]:
         return [row[0] for row in result.all()]
 
 
-async def insert_payment_record_pending(session: AsyncSession, payment_id: str) -> PaymentRecord:
-    """
-    Insert a payment record with status 'pending' in the current transaction.
-    Does not commit; caller must commit after settle succeeds or rollback on failure.
-
-    Args:
-        session: Active AsyncSession (transaction in progress)
-        payment_id: Unique payment identifier
-
-    Returns:
-        The added PaymentRecord (tx_hash='', status='pending')
-    """
-    record = PaymentRecord(
-        payment_id=payment_id,
-        tx_hash="",
-        status="pending",
-    )
-    session.add(record)
-    await session.flush()
-    return record
-
 
 async def save_payment_record(
     payment_id: str,
@@ -161,13 +141,41 @@ async def save_payment_record(
 
 async def get_payment_by_id(payment_id: str) -> Optional[PaymentRecord]:
     """
-    Get a payment record by payment_id.
+    Get the latest payment record by payment_id (payment_id is not unique).
     
     Args:
         payment_id: The payment ID to look up
         
     Returns:
-        PaymentRecord if found, None otherwise
+        PaymentRecord if found (latest by id), None otherwise
     """
+    from sqlalchemy import select
     async with get_session() as session:
-        return await session.get(PaymentRecord, payment_id)
+        result = await session.execute(
+            select(PaymentRecord)
+            .where(PaymentRecord.payment_id == payment_id)
+            .order_by(PaymentRecord.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+
+async def get_payment_by_tx_hash(tx_hash: str) -> Optional[PaymentRecord]:
+    """
+    Get the latest payment record by tx_hash (one tx_hash may have multiple records).
+    
+    Args:
+        tx_hash: The transaction hash to look up
+        
+    Returns:
+        PaymentRecord if found (latest by id), None otherwise
+    """
+    from sqlalchemy import select
+    async with get_session() as session:
+        result = await session.execute(
+            select(PaymentRecord)
+            .where(PaymentRecord.tx_hash == tx_hash)
+            .order_by(PaymentRecord.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()

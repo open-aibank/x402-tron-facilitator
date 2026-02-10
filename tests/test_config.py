@@ -9,6 +9,7 @@ def test_config_default_values():
     # Default values should match expectations
     assert config.server_host == "0.0.0.0"
     assert config.server_port == 8001
+    assert config.server_workers == 1
     assert config.monitoring_endpoint == "/metrics"
 
 def test_env_priority(monkeypatch):

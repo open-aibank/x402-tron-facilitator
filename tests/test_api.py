@@ -111,20 +111,7 @@ async def test_rate_limiting_trigger(client, mocker):
         new_callable=AsyncMock,
         return_value=SettleResponse(success=True, transaction="0xtx"),
     )
-    mock_session = MagicMock()
-    mock_session.commit = AsyncMock()
-    mock_session.rollback = AsyncMock()
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mocker.patch("main.get_session", return_value=mock_session)
-    mock_record = MagicMock()
-    mock_record.tx_hash = ""
-    mock_record.status = "pending"
-    mocker.patch(
-        "main.insert_payment_record_pending",
-        new_callable=AsyncMock,
-        return_value=mock_record,
-    )
+    mocker.patch("main.save_payment_record", new_callable=AsyncMock)
 
     resp1 = await client.post("/settle", json=SETTLE_BODY)
     assert resp1.status_code == 200
@@ -134,29 +121,14 @@ async def test_rate_limiting_trigger(client, mocker):
     assert "Rate limit exceeded" in resp2.json()["error"]
 
 
-# --- Settle flow tests (insert pending -> settle -> update & commit / rollback) ---
+# --- Settle flow tests (settle first -> save_payment_record; no transaction, no 409) ---
 
 
 @pytest.mark.asyncio
 async def test_settle_success_with_payment_id(client, mocker):
-    """Settle with payment_id: insert pending -> settle succeeds -> update & commit -> 200."""
+    """Settle with payment_id: settle succeeds -> save_payment_record(payment_id, tx_hash, 'success') -> 200."""
     mocker.patch("auth.get_remote_address", return_value="127.0.0.1")
     mocker.patch("main._get_payment_id_from_request", return_value="pay-123")
-    mock_session = MagicMock()
-    mock_session.commit = AsyncMock()
-    mock_session.rollback = AsyncMock()
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mocker.patch("main.get_session", return_value=mock_session)
-
-    mock_record = MagicMock()
-    mock_record.tx_hash = ""
-    mock_record.status = "pending"
-    mocker.patch(
-        "main.insert_payment_record_pending",
-        new_callable=AsyncMock,
-        return_value=mock_record,
-    )
 
     from x402_tron.types import SettleResponse
     mocker.patch(
@@ -164,16 +136,17 @@ async def test_settle_success_with_payment_id(client, mocker):
         new_callable=AsyncMock,
         return_value=SettleResponse(success=True, transaction="0xtxhash"),
     )
+    save_payment_record_mock = mocker.patch(
+        "main.save_payment_record",
+        new_callable=AsyncMock,
+    )
 
     response = await client.post("/settle", json=SETTLE_BODY)
     assert response.status_code == 200
     data = response.json()
     assert data["success"] is True
     assert data["transaction"] == "0xtxhash"
-    mock_session.commit.assert_awaited_once()
-    mock_session.rollback.assert_not_called()
-    assert mock_record.tx_hash == "0xtxhash"
-    assert mock_record.status == "success"
+    save_payment_record_mock.assert_awaited_once_with("pay-123", "0xtxhash", "success")
 
 
 @pytest.mark.asyncio
@@ -187,100 +160,27 @@ async def test_settle_no_payment_id_calls_settle_only(client, mocker):
         new_callable=AsyncMock,
         return_value=SettleResponse(success=True, transaction="0xtxhash"),
     )
-    get_session_patch = mocker.patch("main.get_session")
+    save_payment_record_mock = mocker.patch("main.save_payment_record")
 
     response = await client.post("/settle", json=SETTLE_BODY)
     assert response.status_code == 200
     data = response.json()
     assert data["success"] is True
-    get_session_patch.assert_not_called()
+    save_payment_record_mock.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_settle_integrity_error_returns_409_with_existing_success(client, mocker):
-    """Insert raises IntegrityError (duplicate payment_id); existing success -> 409 with body."""
-    mocker.patch("auth.get_remote_address", return_value="127.0.0.3")
-    mocker.patch("main._get_payment_id_from_request", return_value="pay-123")
-    mock_session = MagicMock()
-    mock_session.rollback = AsyncMock()
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mocker.patch("main.get_session", return_value=mock_session)
-    from sqlalchemy.exc import IntegrityError
-    mocker.patch(
-        "main.insert_payment_record_pending",
-        new_callable=AsyncMock,
-        side_effect=IntegrityError("stmt", "params", "orig"),
-    )
-    mock_existing = MagicMock()
-    mock_existing.status = "success"
-    mock_existing.tx_hash = "0xexisting"
-    mocker.patch("main.get_payment_by_id", new_callable=AsyncMock, return_value=mock_existing)
-
-    response = await client.post("/settle", json=SETTLE_BODY)
-    assert response.status_code == 409
-    detail = response.json()["detail"]
-    assert detail["message"] == "payment_id already processed"
-    assert detail["success"] is True
-    assert detail["transaction"] == "0xexisting"
-    assert detail["payment_id"] == "pay-123"
-    mock_session.rollback.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_settle_integrity_error_returns_409_no_success_record(client, mocker):
-    """Insert raises IntegrityError; no existing success record -> 409 with body."""
-    mocker.patch("auth.get_remote_address", return_value="127.0.0.4")
-    mocker.patch("main._get_payment_id_from_request", return_value="pay-123")
-    mock_session = MagicMock()
-    mock_session.rollback = AsyncMock()
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mocker.patch("main.get_session", return_value=mock_session)
-    from sqlalchemy.exc import IntegrityError
-    mocker.patch(
-        "main.insert_payment_record_pending",
-        new_callable=AsyncMock,
-        side_effect=IntegrityError("stmt", "params", "orig"),
-    )
-    mocker.patch("main.get_payment_by_id", new_callable=AsyncMock, return_value=None)
-
-    response = await client.post("/settle", json=SETTLE_BODY)
-    assert response.status_code == 409
-    detail = response.json()["detail"]
-    assert detail["message"] == "payment_id already processed"
-    assert detail["success"] is False
-    assert detail["transaction"] is None
-    assert detail["payment_id"] == "pay-123"
-
-
-@pytest.mark.asyncio
-async def test_settle_failure_rollback_no_record(client, mocker):
-    """Settle raises -> rollback -> 500; no record persisted."""
+async def test_settle_failure_returns_500_no_record(client, mocker):
+    """Settle raises -> 500; save_payment_record not called."""
     mocker.patch("auth.get_remote_address", return_value="127.0.0.5")
     mocker.patch("main._get_payment_id_from_request", return_value="pay-123")
-    mock_session = MagicMock()
-    mock_session.commit = AsyncMock()
-    mock_session.rollback = AsyncMock()
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mocker.patch("main.get_session", return_value=mock_session)
-
-    mock_record = MagicMock()
-    mock_record.tx_hash = ""
-    mock_record.status = "pending"
-    mocker.patch(
-        "main.insert_payment_record_pending",
-        new_callable=AsyncMock,
-        return_value=mock_record,
-    )
     mocker.patch(
         "main.x402_facilitator.settle",
         new_callable=AsyncMock,
         side_effect=Exception("chain error"),
     )
+    save_payment_record_mock = mocker.patch("main.save_payment_record")
 
     response = await client.post("/settle", json=SETTLE_BODY)
     assert response.status_code == 500
-    mock_session.rollback.assert_awaited_once()
-    mock_session.commit.assert_not_called()
+    save_payment_record_mock.assert_not_called()
