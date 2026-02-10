@@ -80,7 +80,8 @@ Listens on `http://0.0.0.0:8001` by default.
 | POST | `/fee/quote` | Get payment fee quote |
 | POST | `/verify` | Off-chain verification of payment signature |
 | POST | `/settle` | On-chain settlement |
-| GET | `/payments/{payment_id}` | Query settlement record |
+| GET | `/payments/{payment_id}` | Query settlement record by payment ID |
+| GET | `/payments/tx/{tx_hash}` | Query settlement record by transaction hash |
 | GET | `/health` | Health check |
 
 ## API Key Authentication
