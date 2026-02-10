@@ -80,9 +80,19 @@ Listens on `http://0.0.0.0:8001` by default.
 | POST | `/fee/quote` | Get payment fee quote |
 | POST | `/verify` | Off-chain verification of payment signature |
 | POST | `/settle` | On-chain settlement |
-| GET | `/payments/{payment_id}` | Query settlement record by payment ID |
-| GET | `/payments/tx/{tx_hash}` | Query settlement record by transaction hash |
+| GET | `/payments/{payment_id}` | Query settlement records by payment ID (returns list, optionally filtered by API key's seller) |
+| GET | `/payments/tx/{tx_hash}` | Query settlement records by transaction hash (returns list, optionally filtered by API key's seller) |
 | GET | `/health` | Health check |
+
+Both payment query endpoints return a JSON array of `PaymentRecordResponse` objects, ordered from latest to oldest.  
+Each record includes:
+
+- `paymentId`: Payment identifier (may be `null` if unavailable)
+- `txHash`: Transaction hash
+- `status`: `"success"` or `"failed"`
+- `createdAt`: Record creation timestamp (ISO 8601)
+- `sellerId`: Seller identifier associated with the API key (may be `null`)
+- `network`: Network identifier (e.g. `mainnet`, `nile`, `shasta`; may be `null`)
 
 ## API Key Authentication
 
@@ -90,9 +100,14 @@ Callers must include `X-API-KEY` in request headers, matching a key in the `api_
 
 ### Adding an API Key
 
-The `api_keys` table is created automatically on first startup.
+The `sellers` and `api_keys` tables are created automatically on first startup.
 
-Currently needs to be added to the database manually.
+To onboard a new client:
+
+1. Insert a row into `sellers` with a unique `seller_id`.
+2. Insert one or more rows into `api_keys` with the same `seller_id` and distinct `key` values.
+
+Payment query endpoints will automatically scope results to the `seller_id` associated with the provided `X-API-KEY`.
 
 ## Docker
 
@@ -126,7 +141,7 @@ Servers calling the facilitator (e.g. x402-tron-demo server) must configure:
 ```
 x402-tron-facilitator/
 ├── config/           # Config examples
-├── scripts/          # add_api_key and other scripts
+├── scripts/          # register_seller and other scripts
 ├── src/              # Source code
 │   ├── main.py       # Entry point
 │   ├── config.py     # Config loading

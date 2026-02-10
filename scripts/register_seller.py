@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Add an API key to the api_keys table.
+Register a seller and add an API key.
 Usage:
-  python scripts/add_api_key.py <key>           # Add specified key
-  python scripts/add_api_key.py                 # Generate and add a random key
+  python scripts/add_api_key.py <key>           # Register seller + specified key
+  python scripts/add_api_key.py                 # Register seller + generated key
 """
 
 import argparse
@@ -11,6 +11,7 @@ import asyncio
 import secrets
 import sys
 from pathlib import Path
+import uuid
 
 # Add project root to path
 project_root = Path(__file__).resolve().parent.parent
@@ -19,11 +20,11 @@ sys.path.insert(0, str(project_root / "src"))
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from config import config
-from database import APIKey, _ssl_for_asyncpg
+from database import APIKey, Seller, _ssl_for_asyncpg
 
 
-async def add_api_key(api_key: str) -> None:
-    """Add an API key to the database."""
+async def register_seller(api_key: str) -> None:
+    """Register a seller (UUID) and add an API key to the database."""
     config.load_from_yaml()
     database_url = await config.get_database_url()
     max_overflow = max(0, config.database_max_open_conns - config.database_max_idle_conns)
@@ -39,11 +40,16 @@ async def add_api_key(api_key: str) -> None:
     engine = create_async_engine(database_url, **engine_kw)
     async_session = async_sessionmaker(engine, expire_on_commit=False)
 
+    seller_id = str(uuid.uuid4())
+
     async with async_session() as session:
-        record = APIKey(key=api_key)
-        session.add(record)
+        seller = Seller(seller_id=seller_id)
+        api_key_record = APIKey(seller_id=seller_id, key=api_key)
+        session.add(seller)
+        session.add(api_key_record)
         try:
             await session.commit()
+            print(f"Seller registered successfully: seller_id={seller_id}")
             print(f"API key added successfully: {api_key}")
         except Exception as e:
             await session.rollback()
@@ -56,7 +62,7 @@ async def add_api_key(api_key: str) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Add API key to x402-tron-facilitator")
+    parser = argparse.ArgumentParser(description="Register seller and API key for x402-tron-facilitator")
     parser.add_argument(
         "key",
         nargs="?",
@@ -69,7 +75,7 @@ def main():
         api_key = secrets.token_hex(32)
         print(f"Generated new API key: {api_key}")
 
-    asyncio.run(add_api_key(api_key))
+    asyncio.run(register_seller(api_key))
 
 
 if __name__ == "__main__":

@@ -83,18 +83,20 @@ async def test_get_payment_success(client, mock_db):
     mock_record.status = "success"
     mock_record.created_at = datetime.now()
     
-    mock_db["get"].return_value = mock_record
+    mock_db["get"].return_value = [mock_record]
     
     response = await client.get("/payments/pay-123")
     assert response.status_code == 200
     data = response.json()
-    assert data["paymentId"] == "pay-123"
-    assert data["txHash"] == "0xhash"
+    assert isinstance(data, list)
+    assert len(data) == 1
+    assert data[0]["paymentId"] == "pay-123"
+    assert data[0]["txHash"] == "0xhash"
 
 @pytest.mark.asyncio
 async def test_get_payment_not_found(client, mock_db):
     """Test /payments/{payment_id} endpoint - Not found state"""
-    mock_db["get"].return_value = None
+    mock_db["get"].return_value = []
     
     response = await client.get("/payments/non-existent")
     assert response.status_code == 404
@@ -126,7 +128,7 @@ async def test_rate_limiting_trigger(client, mocker):
 
 @pytest.mark.asyncio
 async def test_settle_success_with_payment_id(client, mocker):
-    """Settle with payment_id: settle succeeds -> save_payment_record(payment_id, tx_hash, 'success') -> 200."""
+    """Settle with payment_id: settle succeeds -> save_payment_record(payment_id, seller_id, network, tx_hash, 'success') -> 200."""
     mocker.patch("auth.get_remote_address", return_value="127.0.0.1")
     mocker.patch("main._get_payment_id_from_request", return_value="pay-123")
 
@@ -146,12 +148,13 @@ async def test_settle_success_with_payment_id(client, mocker):
     data = response.json()
     assert data["success"] is True
     assert data["transaction"] == "0xtxhash"
-    save_payment_record_mock.assert_awaited_once_with("pay-123", "0xtxhash", "success")
+    # No API key in this test, so seller_id is None; network comes from request body ("mainnet")
+    save_payment_record_mock.assert_awaited_once_with("pay-123", None, "mainnet", "0xtxhash", "success")
 
 
 @pytest.mark.asyncio
 async def test_settle_no_payment_id_calls_settle_only(client, mocker):
-    """Settle without payment_id: no DB; settle only -> 200."""
+    """Settle without payment_id: still records a row with nullable payment_id/seller_id -> 200."""
     from x402_tron.types import SettleResponse
     mocker.patch("auth.get_remote_address", return_value="127.0.0.2")
     mocker.patch("main._get_payment_id_from_request", return_value=None)
@@ -166,7 +169,8 @@ async def test_settle_no_payment_id_calls_settle_only(client, mocker):
     assert response.status_code == 200
     data = response.json()
     assert data["success"] is True
-    save_payment_record_mock.assert_not_called()
+    # _get_payment_id_from_request returns None, seller_id is None; network from body ("mainnet")
+    save_payment_record_mock.assert_awaited_once_with(None, None, "mainnet", "0xtxhash", "success")
 
 
 @pytest.mark.asyncio

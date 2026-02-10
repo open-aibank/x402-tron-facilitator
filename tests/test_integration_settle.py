@@ -236,10 +236,13 @@ async def test_settle_integration_first_request_success(integration_client, mock
 
     get_resp = await integration_client.get(f"/payments/{payment_id}")
     assert get_resp.status_code == 200
-    record = get_resp.json()
-    assert record["paymentId"] == payment_id
-    assert record["status"] == "success"
-    assert record["txHash"] == "0xintegration_success"
+    records = get_resp.json()
+    assert isinstance(records, list)
+    assert len(records) >= 1
+    latest = records[0]
+    assert latest["paymentId"] == payment_id
+    assert latest["status"] == "success"
+    assert latest["txHash"] == "0xintegration_success"
 
 
 @pytest.mark.integration
@@ -272,10 +275,13 @@ async def test_settle_integration_same_payment_id_twice(integration_client, mock
 
     get_resp = await integration_client.get(f"/payments/{payment_id}")
     assert get_resp.status_code == 200
-    record = get_resp.json()
-    assert record["paymentId"] == payment_id
-    assert record["status"] == "success"
-    assert record["txHash"] == tx_hashes[1]
+    records = get_resp.json()
+    assert isinstance(records, list)
+    assert len(records) >= 2
+    latest = records[0]
+    assert latest["paymentId"] == payment_id
+    assert latest["status"] == "success"
+    assert latest["txHash"] == tx_hashes[1]
 
 
 @pytest.mark.integration
@@ -310,6 +316,9 @@ async def test_settle_integration_concurrent_same_payment_id(integration_client,
 
     get_resp = await integration_client.get(f"/payments/{payment_id}")
     assert get_resp.status_code == 200
-    record = get_resp.json()
-    assert record["paymentId"] == payment_id
-    assert record["status"] == "success"
+    records = get_resp.json()
+    assert isinstance(records, list)
+    assert len(records) >= 1
+    latest = records[0]
+    assert latest["paymentId"] == payment_id
+    assert latest["status"] == "success"

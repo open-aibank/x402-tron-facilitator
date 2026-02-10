@@ -26,6 +26,7 @@ from database import (
     get_payment_by_id,
     get_payment_by_tx_hash,
     save_payment_record,
+    get_api_key_by_key,
 )
 from logging_setup import setup_logging
 from schemas import VerifyRequest, SettleRequest, FeeQuoteRequest, PaymentRecordResponse
@@ -183,6 +184,28 @@ def _get_payment_id_from_request(request_data: SettleRequest) -> str | None:
     except AttributeError:
         return None
 
+def _get_network_from_request(request_data: SettleRequest) -> str | None:
+    """Safely extract network from request; returns None if structure is invalid."""
+    try:
+        return request_data.paymentRequirements.network
+    except AttributeError:
+        return None
+
+async def _get_seller_id_from_api_key(api_key: str | None) -> str | None:
+    """Get seller id from api key.
+    if api_key is None, return None.
+    if api_key is not None, get the seller id from the database.
+    if the seller id is not found, return None.
+    return the seller id.
+    """
+
+    if api_key is None:
+        return None
+
+    api_key_record = await get_api_key_by_key(api_key)
+    if api_key_record is None:
+        return None
+    return api_key_record.seller_id
 
 @app.post("/settle", response_model=SettleResponse)
 @limiter.limit(get_dynamic_rate_limit, key_func=get_dynamic_key_func)
@@ -200,33 +223,36 @@ async def settle(request: Request, request_data: SettleRequest):
         logger.exception("Settle failed")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-    if payment_id:
-        tx_hash = result.transaction or ""
-        status = "success" if result.success else "failed"
-        try:
-            await save_payment_record(payment_id, tx_hash, status)
-            logger.info(f"Payment record saved: {payment_id} -> {tx_hash}")
-        except Exception:
-            logger.exception("Failed to save payment record (settle result still returned): payment_id=%s", payment_id)
+    tx_hash = result.transaction or ""
+    status = "success" if result.success else "failed"
+    try:
+        network = _get_network_from_request(request_data)
+        seller_id = await _get_seller_id_from_api_key(getattr(request.state, "api_key", None))
+        await save_payment_record(payment_id, seller_id, network, tx_hash, status)
+        logger.info(f"Payment record saved: {seller_id} {network} {payment_id} -> {tx_hash}")
+    except Exception:
+        logger.exception("Failed to save payment record (settle result still returned): payment_id=%s", payment_id)
 
     return result
 
-@app.get("/payments/{payment_id}", response_model=PaymentRecordResponse)
+@app.get("/payments/{payment_id}", response_model=list[PaymentRecordResponse])
 async def get_payment(request: Request, payment_id: str):
     """Get payment record by payment_id."""
-    record = await get_payment_by_id(payment_id)
-    if record is None:
+    seller_id = await _get_seller_id_from_api_key(getattr(request.state, "api_key", None))
+    records = await get_payment_by_id(payment_id, seller_id)
+    if not records:
         raise HTTPException(status_code=404, detail="Payment not found")
-    return _payment_record_to_response(record)
+    return [_payment_record_to_response(record) for record in records]
 
 
-@app.get("/payments/tx/{tx_hash}", response_model=PaymentRecordResponse)
+@app.get("/payments/tx/{tx_hash}", response_model=list[PaymentRecordResponse])
 async def get_payment_by_tx(request: Request, tx_hash: str):
     """Get payment record by transaction hash. Returns latest if multiple."""
-    record = await get_payment_by_tx_hash(tx_hash)
-    if record is None:
+    seller_id = await _get_seller_id_from_api_key(getattr(request.state, "api_key", None))
+    records = await get_payment_by_tx_hash(tx_hash, seller_id)
+    if not records:
         raise HTTPException(status_code=404, detail="Payment not found")
-    return _payment_record_to_response(record)
+    return [_payment_record_to_response(record) for record in records]
 
 
 def _payment_record_to_response(record):

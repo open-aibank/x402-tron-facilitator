@@ -26,7 +26,9 @@ class PaymentRecord(Base):
     __tablename__ = "payment_records"
     
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    payment_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    seller_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    network: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    payment_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     tx_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -35,14 +37,32 @@ class PaymentRecord(Base):
         nullable=False,
     )
 
-
 class APIKey(Base):
     """API Key Model"""
     
     __tablename__ = "api_keys"
-    
-    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    seller_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
+
+class Seller(Base):
+    """Seller Model"""
+    
+    __tablename__ = "sellers"
+    
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    seller_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
 # Global engine and session maker
 _engine = None
@@ -112,7 +132,9 @@ async def get_all_api_keys() -> list[str]:
 
 
 async def save_payment_record(
-    payment_id: str,
+    payment_id: str | None,
+    seller_id: str | None,
+    network: str | None,
     tx_hash: str,
     status: str,
 ) -> PaymentRecord:
@@ -121,6 +143,8 @@ async def save_payment_record(
     
     Args:
         payment_id: Unique payment identifier
+        seller_id: Seller identifier
+        network: Network identifier
         tx_hash: Transaction hash
         status: Payment status (success/failed)
         
@@ -130,6 +154,8 @@ async def save_payment_record(
     async with get_session() as session:
         record = PaymentRecord(
             payment_id=payment_id,
+            seller_id=seller_id,
+            network=network,
             tx_hash=tx_hash,
             status=status,
         )
@@ -139,43 +165,46 @@ async def save_payment_record(
         return record
 
 
-async def get_payment_by_id(payment_id: str) -> Optional[PaymentRecord]:
+async def get_payment_by_id(payment_id: str, seller_id: str | None = None) -> list[PaymentRecord]:
     """
-    Get the latest payment record by payment_id (payment_id is not unique).
-    
-    Args:
-        payment_id: The payment ID to look up
-        
-    Returns:
-        PaymentRecord if found (latest by id), None otherwise
+    Get payment records by payment_id (payment_id is not unique).
+    If seller_id is provided, results are additionally filtered by seller_id.
+    Results are ordered by id descending (latest first).
+    """
+    from sqlalchemy import select
+    async with get_session() as session:
+        stmt = select(PaymentRecord).where(PaymentRecord.payment_id == payment_id)
+        if seller_id is not None:
+            stmt = stmt.where(PaymentRecord.seller_id == seller_id)
+        stmt = stmt.order_by(PaymentRecord.id.desc())
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+
+async def get_payment_by_tx_hash(tx_hash: str, seller_id: str | None = None) -> list[PaymentRecord]:
+    """
+    Get payment records by tx_hash (one tx_hash may have multiple records).
+    If seller_id is provided, results are additionally filtered by seller_id.
+    Results are ordered by id descending (latest first).
+    """
+    from sqlalchemy import select
+    async with get_session() as session:
+        stmt = select(PaymentRecord).where(PaymentRecord.tx_hash == tx_hash)
+        if seller_id is not None:
+            stmt = stmt.where(PaymentRecord.seller_id == seller_id)
+        stmt = stmt.order_by(PaymentRecord.id.desc())
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+async def get_api_key_by_key(api_key: str) -> str | None:
+    """Get api key by key.
+    if api key is not found, return None.
+    return the api key.
     """
     from sqlalchemy import select
     async with get_session() as session:
         result = await session.execute(
-            select(PaymentRecord)
-            .where(PaymentRecord.payment_id == payment_id)
-            .order_by(PaymentRecord.id.desc())
-            .limit(1)
-        )
-        return result.scalar_one_or_none()
-
-
-async def get_payment_by_tx_hash(tx_hash: str) -> Optional[PaymentRecord]:
-    """
-    Get the latest payment record by tx_hash (one tx_hash may have multiple records).
-    
-    Args:
-        tx_hash: The transaction hash to look up
-        
-    Returns:
-        PaymentRecord if found (latest by id), None otherwise
-    """
-    from sqlalchemy import select
-    async with get_session() as session:
-        result = await session.execute(
-            select(PaymentRecord)
-            .where(PaymentRecord.tx_hash == tx_hash)
-            .order_by(PaymentRecord.id.desc())
-            .limit(1)
+            select(APIKey)
+            .where(APIKey.key == api_key)
         )
         return result.scalar_one_or_none()
