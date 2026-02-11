@@ -160,7 +160,3 @@ x402-tron-facilitator/
 ├── Dockerfile
 └── requirements.txt
 ```
-
----
-
-Built with ❤️ by the **Open AI Bank** team.

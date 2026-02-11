@@ -64,7 +64,6 @@ async def lifespan(app: FastAPI):
     
     # Initialize database (URL may include password from 1Password)
     database_url = await config.get_database_url()
-    logger.info(f"Database URL: {database_url}")
     max_overflow = max(0, config.database_max_open_conns - config.database_max_idle_conns)
     await init_database(
         database_url,
