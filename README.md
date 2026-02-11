@@ -148,7 +148,7 @@ Servers that call the facilitator (e.g. resource servers using X402) must config
 ## Project Structure
 
 ```
-x402-tron-facilitator/
+x402-facilitator/
 ├── config/           # Config examples
 ├── scripts/          # register_seller and other scripts
 ├── src/              # Source code
