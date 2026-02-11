@@ -25,14 +25,17 @@ def test_env_priority(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_private_key_fallback(monkeypatch):
-    """Verify private key retrieval fallback logic (YAML priority over 1Password)"""
+    """Verify private key retrieval: per-network key in YAML over 1Password fallback"""
     config = Config()
     config._config = {
-        "facilitator": {"private_key": "direct-key"},
-        "onepassword": {"token": "op-token", "vault": "V", "item": "I"}
+        "facilitator": {
+            "networks": {
+                "tron:nile": {"fee_to_address": "T...", "private_key": "direct-key"},
+            }
+        },
+        "onepassword": {"token": "op-token", "vault": "V", "item": "I"},
     }
-    
-    key = await config.get_private_key()
+    key = await config.get_private_key("tron:nile")
     assert key == "direct-key"
 
 @pytest.mark.asyncio

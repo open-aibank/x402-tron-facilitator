@@ -164,10 +164,14 @@ def _minimal_config(db_url: str) -> dict:
     return {
         "database": {"url": db_url},
         "facilitator": {
-            "fee_to_address": "TXxx0000000000000000000000000000000",
-            "base_fee": "0",
-            "networks": ["mainnet"],
-            "private_key": "0" * 64,
+            "trongrid_api_key": "",
+            "networks": {
+                "tron:mainnet": {
+                    "fee_to_address": "TXxx0000000000000000000000000000000",
+                    "base_fee": {"USDT": 0},
+                    "private_key": "0" * 64,
+                },
+            },
         },
         "logging": {},
     }
@@ -217,7 +221,7 @@ async def integration_client(mocker, integration_db_url):
 @pytest.mark.asyncio
 async def test_settle_integration_first_request_success(integration_client, mocker):
     """With payment_id: settle first -> save_payment_record -> 200, record in DB with success."""
-    from x402_tron.types import SettleResponse
+    from bankofai.x402.types import SettleResponse
 
     async def mock_settle_success(*args, **kwargs):
         await asyncio.sleep(1)
@@ -249,7 +253,7 @@ async def test_settle_integration_first_request_success(integration_client, mock
 @pytest.mark.asyncio
 async def test_settle_integration_same_payment_id_twice(integration_client, mocker):
     """Same payment_id twice: both 200; two records in DB; GET returns latest."""
-    from x402_tron.types import SettleResponse
+    from bankofai.x402.types import SettleResponse
 
     tx_hashes = ["0xintegration_dup_1", "0xintegration_dup_2"]
     call_idx = [0]
@@ -288,7 +292,7 @@ async def test_settle_integration_same_payment_id_twice(integration_client, mock
 @pytest.mark.asyncio
 async def test_settle_integration_concurrent_same_payment_id(integration_client, mocker):
     """Concurrent requests with same payment_id: all 200, settle called n times, n records; GET returns latest."""
-    from x402_tron.types import SettleResponse
+    from bankofai.x402.types import SettleResponse
 
     settle_call_count = 0
 

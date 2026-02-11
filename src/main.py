@@ -7,19 +7,27 @@ import logging
 import asyncio
 import os
 from contextlib import asynccontextmanager
-
+from helper import (
+    to_internal_network,
+    is_tron_network,
+    is_bsc_network,
+    is_eth_network,
+)
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from x402_tron.mechanisms.facilitator import ExactTronFacilitatorMechanism
-from x402_tron.signers.facilitator import TronFacilitatorSigner
-from x402_tron.facilitator.x402_facilitator import X402Facilitator
-from x402_tron.types import (
+from bankofai.x402.mechanisms.tron.exact_permit.facilitator import ExactPermitTronFacilitatorMechanism
+from bankofai.x402.mechanisms.evm.exact_permit.facilitator import ExactPermitEvmFacilitatorMechanism
+from bankofai.x402.mechanisms.tron.exact.facilitator import ExactTronFacilitatorMechanism
+from bankofai.x402.mechanisms.evm.exact.facilitator import ExactEvmFacilitatorMechanism
+from bankofai.x402.signers.facilitator import TronFacilitatorSigner, EvmFacilitatorSigner
+from bankofai.x402.facilitator.x402_facilitator import X402Facilitator
+from bankofai.x402.types import (
     VerifyResponse,
     SettleResponse,
 )
-
 from config import config
 from database import (
     init_database,
@@ -72,31 +80,50 @@ async def lifespan(app: FastAPI):
     refresher_task = asyncio.create_task(api_key_refresher())
     logger.info("API key refresher task started")
     
-    # Get private key from 1Password
-    private_key = await config.get_private_key()
-    logger.info("Private key retrieved from 1Password")
-
-    # Get TronGrid API Key from 1Password and set in environment for the underlying library
+    # TronGrid API Key (shared across networks) — set in environment for the underlying library
     trongrid_api_key = await config.get_trongrid_api_key()
     if trongrid_api_key:
         os.environ["TRON_GRID_API_KEY"] = trongrid_api_key
         logger.info("TronGrid API Key retrieved and injected into environment")
     else:
         logger.warning("TronGrid API Key not configured. Using default rate limits for blockchain requests.")
-    
-    # Initialize facilitator for each network
+
+    # Initialize facilitator per network (each has its own fee_to_address, base_fee, private_key)
     for network in config.networks:
-        facilitator_signer = TronFacilitatorSigner.from_private_key(
-            private_key=private_key,
-            network=network,
-        )
-        facilitator_mechanism = ExactTronFacilitatorMechanism(
-            facilitator_signer,
-            fee_to=config.fee_to_address,
-            base_fee=config.base_fee,
-        )
-        x402_facilitator.register([f"tron:{network}"], facilitator_mechanism)
-        logger.info(f"Facilitator registered for tron:{network}")
+        private_key = await config.get_private_key(network)
+        fee_to = config.get_fee_to_address(network)
+        base_fee = config.get_base_fee(network)
+        if is_tron_network(network):
+            facilitator_signer = TronFacilitatorSigner.from_private_key(private_key=private_key)
+            facilitator_mechanism = ExactPermitTronFacilitatorMechanism(
+                facilitator_signer,
+                fee_to=fee_to,
+                base_fee=base_fee,
+            )
+            x402_facilitator.register([to_internal_network[network]], facilitator_mechanism)
+            facilitator_mechanism = ExactTronFacilitatorMechanism(
+                facilitator_signer,
+            )
+            x402_facilitator.register([to_internal_network[network]], facilitator_mechanism)
+            logger.info(f"Facilitator registered for {network}")
+        elif is_bsc_network(network) or is_eth_network(network):
+            facilitator_signer = EvmFacilitatorSigner.from_private_key(private_key=private_key)
+            facilitator_mechanism = ExactPermitEvmFacilitatorMechanism(
+                facilitator_signer,
+                fee_to=fee_to,
+                base_fee=base_fee,
+            )
+            x402_facilitator.register([to_internal_network[network]], facilitator_mechanism)
+
+            facilitator_mechanism = ExactEvmFacilitatorMechanism(
+                facilitator_signer,
+            )
+            x402_facilitator.register([to_internal_network[network]], facilitator_mechanism)
+
+            logger.info(f"Facilitator registered for {network}")
+        else:
+            logger.warning(f"Unsupported network: {network}")
+            continue
     
     yield
     
@@ -156,7 +183,7 @@ async def health():
 @app.get("/supported")
 async def supported(request: Request):
     """Get supported capabilities"""
-    return x402_facilitator.supported(config.fee_to_address, pricing="flat")
+    return x402_facilitator.supported(pricing="flat")
 
 @app.post("/fee/quote")
 async def fee_quote(request: Request, request_data: FeeQuoteRequest):

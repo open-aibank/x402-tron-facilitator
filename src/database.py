@@ -196,10 +196,9 @@ async def get_payment_by_tx_hash(tx_hash: str, seller_id: str | None = None) -> 
         result = await session.execute(stmt)
         return list(result.scalars().all())
 
-async def get_api_key_by_key(api_key: str) -> str | None:
-    """Get api key by key.
-    if api key is not found, return None.
-    return the api key.
+async def get_api_key_by_key(api_key: str) -> APIKey | None:
+    """Get APIKey row by key.
+    Returns the APIKey instance, or None if not found.
     """
     from sqlalchemy import select
     async with get_session() as session:

@@ -2,11 +2,12 @@ fastapi
 uvicorn
 pydantic-settings
 pydantic>=2.7.0
-x402-tron[tron,fastapi] @ git+https://github.com/open-aibank/x402-tron@v0.2.1#subdirectory=python/x402
+bankofai-x402[tron,fastapi] @ git+https://github.com/bankofai/x402@v0.3.1#subdirectory=python/x402
 httpx
 
 tronpy>=0.4.0
 eth-account>=0.10.0
+web3>=6.0.0
 
 # Database
 sqlalchemy>=2.0.0

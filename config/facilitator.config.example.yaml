@@ -11,14 +11,14 @@ database:
   # max_idle_conns: 15           # connections to keep open when idle (pool_size)
   # max_life_time: 600           # seconds before recycling a connection (pool_recycle)
 
+# 1Password: each value is "vault/item/field" (op:// style). Set OP_SERVICE_ACCOUNT_TOKEN when using.
 onepassword:
-  vault: ""
-  privatekey_item: ""
-  privatekey_field: ""
-  database_password_item: ""
-  database_password_field: ""
-  trongrid_api_key_item: ""
-  trongrid_api_key_field: ""
+  tron_nile_private_key: ""
+  tron_mainnet_private_key: ""
+  bsc_testnet_private_key: ""
+  bsc_mainnet_private_key: ""
+  database_password: ""
+  trongrid_api_key: ""
 
 server:
   host: "0.0.0.0"
@@ -41,16 +41,30 @@ monitoring:
   endpoint: "/metrics"
 
 facilitator:
-  fee_to_address: ""
-  # Base fee per token (symbol -> amount in smallest units)
-  base_fee:
-    USDT: 100              # 0.0001 USDT (6 decimals)
-    USDD: 100000000000000  # 0.0001 USDD (18 decimals)
-  # --- Local Development Fallbacks ---
-  # If provided, these values will be used to bypass 1Password retrieval
-  private_key: ""
+  # Shared across all networks (same level as networks)
   trongrid_api_key: ""
-  
+
+  # Per-network config. Key = network id; listed = enabled. Each has fee_to_address, base_fee, private_key.
   networks:
-    - nile
-    - mainnet
+    tron:nile:
+      fee_to_address: ""
+      base_fee:
+        USDT: 100              # 0.0001 USDT (6 decimals)
+        USDD: 100000000000000  # 0.0001 USDD (18 decimals)
+      private_key: ""          # or use 1Password: onepassword.<network> = "vault/item/field"
+    tron:mainnet:
+      fee_to_address: ""
+      base_fee:
+        USDT: 100
+        USDD: 100000000000000
+      private_key: ""
+    bsc:testnet:
+      fee_to_address: ""
+      base_fee:
+        USDC: 100
+      private_key: ""
+    bsc:mainnet:
+      fee_to_address: ""
+      base_fee:
+        EPS: 100
+      private_key: ""

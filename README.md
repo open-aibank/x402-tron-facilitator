@@ -1,14 +1,12 @@
-# X402 TRON Facilitator
+# X402 Facilitator
 
-X402 TRON Facilitator is a service designed to facilitate the **X402 (HTTP 402 Payment Required)** protocol on the TRON blockchain. It provides a standard interface for backend services to handle off-chain payment verification and on-chain settlement, enabling seamless "Pay-as-you-go" mechanisms for digital resources.
+X402 Facilitator is a **general-purpose, multi-chain** service that implements the **X402 (HTTP 402 Payment Required)** protocol. It supports multiple chains and networks (currently TRON and BSC) and provides a standard interface for backend services to handle off-chain payment verification and on-chain settlement, enabling seamless "Pay-as-you-go" mechanisms for digital resources.
 
 ## 🚀 Key Features
 
-- **Multi-Network Support**: Compatible with TRON Mainnet, Nile Testnet, and 
-Shasta Testnet.
+- **Multi-Chain & Multi-Network**: Supports TRON and BSC; add networks via config—no code change required.
 - **Payment Verification**: Robust verification of payment payloads off-chain.
-- **On-chain Settlement**: Handles the complexity of settling payments directly 
-on the TRON blockchain.
+- **On-Chain Settlement**: Settles payments on supported blockchains; per-network signer and fee config.
 - **Dynamic Fee Quoting**: Provides real-time fee quotes based on payment 
 requirements.
 - **FastAPI Powered**: High-performance, production-ready REST API.
@@ -19,7 +17,7 @@ requirements.
 
 - Python 3.10+
 - PostgreSQL database
-- TRON wallet private key (for settlement signing)
+- Per-network wallet private key(s) for settlement signing (one per chain/network you enable)
 - 1Password or local config (private key, database password, etc.)
 
 ## Configuration
@@ -28,24 +26,35 @@ Config file: `config/facilitator.config.yaml`. See `config/facilitator.config.ex
 
 ### Required
 
+Add any networks you need under `facilitator.networks`; each has `fee_to_address`, `base_fee`, and `private_key` (or 1Password). Example:
+
 ```yaml
 database:
   url: ""
   password: "your_password"   # Local dev: set directly; or use database_password_item for 1Password
 
 facilitator:
-  fee_to_address: "T..."      # Fee recipient address
-  private_key: "hex..."       # Local dev; or configure 1Password
-  networks: [nile, shasta, mainnet]
+  trongrid_api_key: ""        # For TRON networks only (optional; or 1Password)
+  networks:                   # Per-network config; listed = enabled. TRON, BSC, etc.
+    tron:nile:
+      fee_to_address: "T..."
+      base_fee: { USDT: 100 }
+      private_key: "hex..."   # Or use onepassword.<network_id>.privatekey_item as fallback
+    tron:mainnet:
+      fee_to_address: "T..."
+      base_fee: { USDT: 100 }
+      private_key: ""
 ```
 
 ### Secrets: 1Password or Local
 
-- **Private Key**: `facilitator.private_key` or `onepassword.privatekey_item`
-- **Database Password**: `database.password` or `onepassword.database_password_item`
-- **TronGrid API Key**: `facilitator.trongrid_api_key` or `onepassword.trongrid_api_key_item`
+Each 1Password entry is a single string: **`vault/item/field`** (same as `op://` reference without the prefix).
 
-Configure environment variable `OP_SERVICE_ACCOUNT_TOKEN` when using 1Password.
+- **Private Key**: `facilitator.networks.<network_id>.private_key` per network, or `onepassword.<network>_private_key` = `"vault/item/field"` (e.g. `onepassword.tron_nile_private_key`, `onepassword.bsc_testnet_private_key`; key = network id with `:` → `_` + `_private_key`).
+- **Database Password**: `database.password` or `onepassword.database_password` = `"vault/item/field"`.
+- **TronGrid API Key** (TRON only): `facilitator.trongrid_api_key` or `onepassword.trongrid_api_key` = `"vault/item/field"`.
+
+Set `OP_SERVICE_ACCOUNT_TOKEN` when using 1Password.
 
 ### Database Connection Pool (Optional)
 
@@ -92,7 +101,7 @@ Each record includes:
 - `status`: `"success"` or `"failed"`
 - `createdAt`: Record creation timestamp (ISO 8601)
 - `sellerId`: Seller identifier associated with the API key (may be `null`)
-- `network`: Network identifier (e.g. `mainnet`, `nile`, `shasta`; may be `null`)
+- `network`: Network identifier (e.g. `mainnet`, `nile`, `shasta`, `bsc:testnet`; may be `null`)
 
 ## API Key Authentication
 
@@ -123,7 +132,7 @@ docker run -p 8001:8001 \
   x402-facilitator
 ```
 
-Images are published to [Docker Hub](https://hub.docker.com/u/bankofai) as `bankofai/x402-tron-facilitator`. CI builds on push to main/master or `v*` tags.
+Images are published to [Docker Hub](https://hub.docker.com/u/bankofai) as `bankofai/x402-tron-facilitator` (general-purpose multi-chain X402 Facilitator). CI builds on push to main/master or `v*` tags.
 
 ## Logging
 
@@ -131,7 +140,7 @@ Logs are written to `logs/x402-facilitator.{date}_{time}.log`, with a new file p
 
 ## Caller Configuration
 
-Servers calling the facilitator (e.g. x402-tron-demo server) must configure:
+Servers that call the facilitator (e.g. resource servers using X402) must configure:
 
 - `FACILITATOR_URL`: Facilitator URL, **use https** 
 - `FACILITATOR_API_KEY`: Key that exists in the facilitator's `api_keys` table

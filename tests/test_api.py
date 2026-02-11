@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
-# Minimal valid settle request body (matches x402_tron SettleRequest / PaymentPayload shape)
+# Minimal valid settle request body (matches bankofai.x402 SettleRequest / PaymentPayload shape)
 SETTLE_BODY = {
     "paymentPayload": {
         "x402Version": 1,
@@ -105,7 +105,7 @@ async def test_get_payment_not_found(client, mock_db):
 @pytest.mark.asyncio
 async def test_rate_limiting_trigger(client, mocker):
     """Verify rate limiting on /settle (Anonymous user 1/min): first 200, second 429."""
-    from x402_tron.types import SettleResponse
+    from bankofai.x402.types import SettleResponse
 
     mocker.patch("auth.get_remote_address", return_value="1.2.3.4")
     mocker.patch(
@@ -132,7 +132,7 @@ async def test_settle_success_with_payment_id(client, mocker):
     mocker.patch("auth.get_remote_address", return_value="127.0.0.1")
     mocker.patch("main._get_payment_id_from_request", return_value="pay-123")
 
-    from x402_tron.types import SettleResponse
+    from bankofai.x402.types import SettleResponse
     mocker.patch(
         "main.x402_facilitator.settle",
         new_callable=AsyncMock,
@@ -155,7 +155,7 @@ async def test_settle_success_with_payment_id(client, mocker):
 @pytest.mark.asyncio
 async def test_settle_no_payment_id_calls_settle_only(client, mocker):
     """Settle without payment_id: still records a row with nullable payment_id/seller_id -> 200."""
-    from x402_tron.types import SettleResponse
+    from bankofai.x402.types import SettleResponse
     mocker.patch("auth.get_remote_address", return_value="127.0.0.2")
     mocker.patch("main._get_payment_id_from_request", return_value=None)
     mocker.patch(
