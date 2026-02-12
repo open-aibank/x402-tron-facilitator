@@ -39,7 +39,7 @@ from database import (
 from logging_setup import setup_logging
 from schemas import VerifyRequest, SettleRequest, FeeQuoteRequest, PaymentRecordResponse
 from auth import setup_auth, api_key_refresher, limiter, get_dynamic_rate_limit, get_dynamic_key_func
-from monitoring import setup_monitoring
+from monitoring import attach_prometheus_middleware
 
 # Setup initial logging (console only)
 setup_logging()
@@ -61,6 +61,10 @@ async def lifespan(app: FastAPI):
     # Re-setup logging with configuration (file logging)
     setup_logging(config.logging_config)
     logger.info("Logging configured with file output")
+    
+    # Configure monitoring (now that config is loaded)
+    from monitoring import start_monitoring_server
+    start_monitoring_server(instrumentator, app, config)
     
     # Initialize database (URL may include password from 1Password)
     database_url = await config.get_database_url()
@@ -143,25 +147,8 @@ app = FastAPI(
 )
 
 # Setup sub-systems
+instrumentator = attach_prometheus_middleware(app)
 setup_auth(app)
-metrics_app = setup_monitoring(app, config)
-
-# If metrics_app is returned, it means monitoring is on a different port
-if metrics_app:
-    import threading
-    def run_metrics():
-        import uvicorn
-        metrics_config = uvicorn.Config(
-            metrics_app, 
-            host=config.server_host, 
-            port=config.monitoring_port, 
-            log_level="error"
-        )
-        server = uvicorn.Server(metrics_config)
-        server.run()
-    
-    threading.Thread(target=run_metrics, daemon=True).start()
-    logger.info(f"Monitoring server started on port {config.monitoring_port}")
 
 # Add CORS middleware (allow_credentials=False when using "*" per CORS spec)
 app.add_middleware(
